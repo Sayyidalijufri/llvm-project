@@ -47,6 +47,12 @@ private:
   DenseMap<Metadata *, SmallSet<std::pair<GlobalVariable *, uint64_t>, 4>>
       TypeIdMap;
 
+  /// VTable -> set of vfuncs in that vtable (that have !type metadata).
+  DenseMap<GlobalVariable *, SmallPtrSet<GlobalValue *, 8>> VFuncMap;
+
+  bool ShouldDependencyStayAliveDueToStrictMetadata(GlobalValue *VTableVal,
+                                                    GlobalValue *VPtr);
+
   // Global variables which are vtables, and which we have enough information
   // about to safely do dead virtual function elimination.
   SmallPtrSet<GlobalValue *, 32> VFESafeVTables;

@@ -288,3 +288,11 @@ In addition, all function pointer loads from a vtable marked with the
 calls sites can be correlated with the vtables which they might load from.
 Other parts of the vtable (RTTI, offset-to-top, ...) can still be accessed with
 normal loads.
+
+Additionally, a vtable can have a ``!vtable_strict_types`` metadata attached,
+which if present imposes a stricter rule on the vtable: All virtual function
+pointers in the vtable must have a matching ``!type`` attachment (where the
+offset in the attachment matches the virtual function). Function pointers
+without a ``!type`` attachment are not participating in removal of unused
+function pointers. All virtual call sites that perform loads into such a vtable
+must use a zero offset in the `llvm.type.checked.load` intrinsic call.

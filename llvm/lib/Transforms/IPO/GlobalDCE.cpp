@@ -121,6 +121,25 @@ void GlobalDCEPass::ComputeDependencies(Value *V,
   }
 }
 
+bool GlobalDCEPass::ShouldDependencyStayAliveDueToStrictMetadata(
+    GlobalValue *VTableVal, GlobalValue *VPtr) {
+  auto *VTable = dyn_cast<GlobalVariable>(VTableVal);
+  if (!VTable)
+    return false;
+
+  bool StrictTypeMetadata = VTable->hasMetadata("vtable_strict_types");
+  if (!StrictTypeMetadata)
+    return false; // Allow VFE on this slot.
+
+  if (VFuncMap[VTable].contains(VPtr))
+    // Have a match in VFuncMap, i.e. have a matching offset in one of the !type
+    // entries. Allow VFE on this slot.
+    return false;
+
+  // No matching entry in VFuncMap. Don't allow VFE on this slot.
+  return true;
+}
+
 void GlobalDCEPass::UpdateGVDependencies(GlobalValue &GV) {
   SmallPtrSet<GlobalValue *, 8> Deps;
   for (User *User : GV.users())
@@ -131,7 +150,8 @@ void GlobalDCEPass::UpdateGVDependencies(GlobalValue &GV) {
     // complete information about all virtual call sites which could call
     // though this vtable, then skip it, because the call site information will
     // be more precise.
-    if (VFESafeVTables.count(GVU) && isa<Function>(&GV)) {
+    if (VFESafeVTables.count(GVU) && isa<Function>(&GV) &&
+        !ShouldDependencyStayAliveDueToStrictMetadata(GVU, &GV)) {
       LLVM_DEBUG(dbgs() << "Ignoring dep " << GVU->getName() << " -> "
                         << GV.getName() << "\n");
       continue;
@@ -173,6 +193,8 @@ void GlobalDCEPass::ScanVTables(Module &M) {
     if (GV.isDeclaration() || Types.empty())
       continue;
 
+    SmallPtrSet<GlobalValue *, 8> VFuncs;
+
     // Use the typeid metadata on the vtable to build a mapping from typeids to
     // the list of (GV, offset) pairs which are the possible vtables for that
     // typeid.
@@ -185,7 +207,16 @@ void GlobalDCEPass::ScanVTables(Module &M) {
               ->getZExtValue();
 
       TypeIdMap[TypeID].insert(std::make_pair(&GV, Offset));
+
+      if (auto *C = getPointerAtOffset(GV.getInitializer(), Offset,
+                                       *GV.getParent(), &GV))
+        if (auto F = dyn_cast_or_null<GlobalValue>(C->stripPointerCasts()))
+          VFuncs.insert(F);
     }
+
+    // Record all the vfunctions that have a matching offset in one of the !type
+    // attributes.
+    VFuncMap[&GV] = VFuncs;
 
     // If the type corresponding to the vtable is private to this translation
     // unit, we know that we can see all virtual functions which might use it,
@@ -449,6 +480,7 @@ PreservedAnalyses GlobalDCEPass::run(Module &M, ModuleAnalysisManager &MAM) {
   GVDependencies.clear();
   ComdatMembers.clear();
   TypeIdMap.clear();
+  VFuncMap.clear();
   VFESafeVTables.clear();
 
   if (Changed)
